@@ -13,6 +13,7 @@ clib-build
 clib-update
 clib-upgrade
 clib-uninstall
+compile_flags.txt
 
 test/package/package-*
 !test/package/package-*.c

@@ -12,6 +12,7 @@
 #include "fs/fs.h"
 #include "logger/logger.h"
 #include "parson/parson.h"
+#include "trim/trim.h"
 #include "version.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -56,19 +57,35 @@ static void setopt_manifest_file(command_t *self) {
 
 static char *find_basepath() {
   char cwd[4096] = {0};
-  getcwd(cwd, 4096);
+  if (NULL == getcwd(cwd, 4096)) {
+    return "";
+  }
 
-  char* last_part = strrchr(cwd, PATH_SEPARATOR);
-  char* base_path = (last_part != NULL) ? last_part + 1 : cwd;
-  return strdup( base_path);
+  size_t len = strlen(cwd);
+
+  while (len > 1 && cwd[len - 1] == PATH_SEPARATOR &&
+         !(len == 3 && cwd[1] == ':' && cwd[2] == PATH_SEPARATOR)) {
+    cwd[--len] = '\0';
+  }
+
+  char *last_part = strrchr(cwd, PATH_SEPARATOR);
+  char *base_path = (last_part != NULL) ? last_part + 1 : cwd;
+
+  if (NULL == base_path || '\0' == base_path[0]) {
+    return "";
+  }
+
+  return strdup(base_path);
 }
 
-static void getinput(char *buffer, size_t s) {
-  char *walk = buffer;
-  int c = 0;
-  while ((walk - s) != buffer && (c = fgetc(stdin)) && c != '\n' && c != 0) {
-    *(walk++) = c;
+static int getinput(char *buffer, size_t size) {
+  if (NULL == fgets(buffer, size, stdin)) {
+    buffer[0] = '\0';
+    return -1;
   }
+
+  trim(buffer);
+  return 0;
 }
 
 static void ask_for(JSON_Object *root, const char *key,
@@ -76,7 +93,12 @@ static void ask_for(JSON_Object *root, const char *key,
   static char buffer[512] = {0};
   memset(buffer, '\0', 512);
   printf("%s", question);
-  getinput(buffer, 512);
+  fflush(stdout);
+  if (0 != getinput(buffer, 512)) {
+    json_object_set_string(root, key, default_value);
+    return;
+  }
+
   char *value = (char *)(strlen(buffer) > 0 ? buffer : default_value);
   json_object_set_string(root, key, value);
 }
@@ -145,21 +167,25 @@ int main(int argc, char *argv[]) {
   JSON_Object *root = json_object(json);
 
   char *basepath = find_basepath();
-  char *package_name = NULL;
+  char package_name[512] = {0};
 
-  int rc = asprintf(&package_name, "package name (%s): ", basepath);
-  if (-1 == rc) {
-    logger_error("error", "asprintf() out of memory");
-    goto end;
+  if (strlen(basepath) > 0) {
+    int rc = snprintf(package_name, sizeof(package_name),
+                      "package name (%s): ", basepath);
+    if (rc < 0 || (size_t)rc >= sizeof(package_name)) {
+      logger_error("error", "package name prompt is too long");
+      goto end;
+    }
+    ask_for(root, "name", basepath, package_name);
+  } else {
+    ask_for(root, "name", basepath, "package name: ");
   }
 
-  ask_for(root, "name", basepath, package_name);
   ask_for(root, "version", "0.1.0", "version (default: 0.1.0): ");
 
   exit_code = write_package_file(opts.manifest, json);
 
 end:
-  free(package_name);
   free(basepath);
 
   json_value_free(json);
